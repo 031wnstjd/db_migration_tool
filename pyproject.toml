@@ -1,0 +1,17 @@
+[project]
+name = "db-migrator-tool"
+version = "0.1.0"
+description = "DB migration tool with FastAPI and Next.js"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116.0",
+  "uvicorn[standard]>=0.35.0",
+  "pydantic>=2.11.0",
+  "oracledb>=2.5.1",
+  "psycopg[binary]>=3.2.6",
+  "sqlalchemy>=2.0.39",
+]
+
+[tool.uv]
+dev-dependencies = []
