@@ -1,0 +1,8 @@
+.git
+.omx
+.pytest_cache
+.venv
+__pycache__
+*.pyc
+frontend/node_modules
+frontend/.next

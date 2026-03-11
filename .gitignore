@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/.next/
+
+# Logs
+*.log
+
+# Local DB / generated data
+data/**/*.db
+data/*.db
+scripts/oracle/init-testdb.generated.sql
+
+# Tooling / local state
+.omx/
+.pytest_cache/
+*.tsbuildinfo
+data/*.db-*
