@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=test_db
+      - POSTGRES_USER=test_user
+      - POSTGRES_PASSWORD=test_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./scripts/postgres/init-testdb.sql:/docker-entrypoint-initdb.d/01-init-testdb.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d test_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    command: npm run dev
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_BASE=http://localhost:8000/api
+      - NEXT_PUBLIC_TEST_PRESET_ENABLED=true
+      - NEXT_PUBLIC_TEST_SOURCE_USER=test_user
+      - NEXT_PUBLIC_TEST_SOURCE_PASSWORD=test_password
+      - NEXT_PUBLIC_TEST_TARGET_USER=test_user
+      - NEXT_PUBLIC_TEST_TARGET_PASSWORD=test_password
+      - NEXT_PUBLIC_TEST_SOURCE_URL=postgresql+psycopg://test_user:test_password@postgres:5432/test_db
+      - NEXT_PUBLIC_TEST_TARGET_URL=postgresql+psycopg://test_user:test_password@postgres:5432/test_db
+      - NEXT_PUBLIC_TEST_SOURCE_SCHEMA=source_schema
+      - NEXT_PUBLIC_TEST_TARGET_SCHEMA=target_schema
+      - NEXT_PUBLIC_TEST_SOURCE_TABLE=users
+      - NEXT_PUBLIC_TEST_TARGET_TABLE=users
+      - NEXT_PUBLIC_TEST_SELECTED_COLUMNS=id,name,age,created_at
+      - NEXT_PUBLIC_TEST_KEY_COLUMNS=id
+      - NEXT_PUBLIC_TEST_STRATEGY=MERGE
+      - NEXT_PUBLIC_TEST_DATE_FILTER_COLUMN=created_at
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      backend:
+        condition: service_started
