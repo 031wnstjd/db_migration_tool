@@ -124,8 +124,9 @@ class MigrationService:
 
     def start_job(self, request: JobStartRequest) -> str:
         job_id = str(uuid.uuid4())
+        job_db_path = repository.DB_PATH
         repository.create_job(job_id, request.dry_run, request.model_dump(by_alias=True))
-        thread = threading.Thread(target=self._run_job, args=(job_id, request), daemon=True)
+        thread = threading.Thread(target=self._run_job, args=(job_id, request, job_db_path), daemon=True)
         self._threads[job_id] = thread
         thread.start()
         return job_id
@@ -135,38 +136,39 @@ class MigrationService:
         if thread is not None:
             thread.join(timeout=timeout)
 
-    def _run_job(self, job_id: str, request: JobStartRequest) -> None:
-        repository.update_job(job_id, status='RUNNING', progress=1, append_log='Job started')
-        try:
-            total_tables = max(1, len(request.table_configs))
-            summaries = []
-            for index, cfg in enumerate(request.table_configs, start=1):
-                if repository.is_cancelled(job_id):
-                    repository.update_job(job_id, status='CANCELLED', append_log='Job cancelled before processing table')
-                    return
+    def _run_job(self, job_id: str, request: JobStartRequest, job_db_path: Any) -> None:
+        with repository.use_db_path(job_db_path):
+            repository.update_job(job_id, status='RUNNING', progress=1, append_log='Job started')
+            try:
+                total_tables = max(1, len(request.table_configs))
+                summaries = []
+                for index, cfg in enumerate(request.table_configs, start=1):
+                    if repository.is_cancelled(job_id):
+                        repository.update_job(job_id, status='CANCELLED', append_log='Job cancelled before processing table')
+                        return
 
-                repository.update_job(
-                    job_id,
-                    append_log=f'Processing {_fq(cfg.source_schema, cfg.source_table)} -> {_fq(cfg.target_schema, cfg.target_table)}',
-                )
-                summary = self._run_single_table(job_id, request, cfg)
-                summaries.append(summary)
-                if summary.get('cancelled'):
                     repository.update_job(
                         job_id,
-                        status='CANCELLED',
-                        result={'tables': summaries},
-                        append_log=f'Job cancelled during table {index}/{total_tables}',
+                        append_log=f'Processing {_fq(cfg.source_schema, cfg.source_table)} -> {_fq(cfg.target_schema, cfg.target_table)}',
                     )
-                    return
-                progress = int(index / total_tables * 100)
-                repository.update_job(job_id, progress=progress, append_log=f'Completed table {index}/{total_tables}')
-            repository.update_job(job_id, status='SUCCESS', progress=100, result={'tables': summaries}, append_log='Job finished successfully')
-        except Exception as exc:
-            logger.exception('Job failed: %s', job_id)
-            repository.update_job(job_id, status='FAILED', append_log=f'Failed: {exc}', result={'error': str(exc)})
-        finally:
-            self._threads.pop(job_id, None)
+                    summary = self._run_single_table(job_id, request, cfg)
+                    summaries.append(summary)
+                    if summary.get('cancelled'):
+                        repository.update_job(
+                            job_id,
+                            status='CANCELLED',
+                            result={'tables': summaries},
+                            append_log=f'Job cancelled during table {index}/{total_tables}',
+                        )
+                        return
+                    progress = int(index / total_tables * 100)
+                    repository.update_job(job_id, progress=progress, append_log=f'Completed table {index}/{total_tables}')
+                repository.update_job(job_id, status='SUCCESS', progress=100, result={'tables': summaries}, append_log='Job finished successfully')
+            except Exception as exc:
+                logger.exception('Job failed: %s', job_id)
+                repository.update_job(job_id, status='FAILED', append_log=f'Failed: {exc}', result={'error': str(exc)})
+            finally:
+                self._threads.pop(job_id, None)
 
     def _run_single_table(self, job_id: str, request: JobStartRequest, cfg: TableMigrationConfig) -> dict[str, Any]:
         preview = _preview_sql(cfg)

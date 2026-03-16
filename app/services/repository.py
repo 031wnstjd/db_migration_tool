@@ -3,23 +3,43 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 DB_PATH = Path("data/app.db")
 _LOCK = threading.Lock()
+_THREAD_LOCAL = threading.local()
+
+
+def _current_db_path() -> Path:
+    return getattr(_THREAD_LOCAL, "db_path", DB_PATH)
+
+
+@contextmanager
+def use_db_path(path: Path):
+    previous = getattr(_THREAD_LOCAL, "db_path", None)
+    _THREAD_LOCAL.db_path = Path(path)
+    try:
+        yield
+    finally:
+        if previous is None:
+            if hasattr(_THREAD_LOCAL, "db_path"):
+                delattr(_THREAD_LOCAL, "db_path")
+        else:
+            _THREAD_LOCAL.db_path = previous
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn = sqlite3.connect(_current_db_path(), timeout=30.0)
     conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
 def init_db() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _current_db_path().parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS jobs (
