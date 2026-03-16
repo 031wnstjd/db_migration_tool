@@ -138,7 +138,7 @@ const toErrorMessage = (resp: ApiResponse<unknown>) =>
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<AppTab>('migration');
-  const [apiBase, setApiBase] = useState(() => process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api');
+  const [apiBase] = useState(() => process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api');
   const [source, setSource] = useState<DBState>(getDefaultDbState('source'));
   const [target, setTarget] = useState<DBState>(getDefaultDbState('target'));
   const [ddl, setDdl] = useState<DdlState>(BASE_DDL_STATE);
@@ -665,20 +665,6 @@ export default function HomePage() {
             DB Table DDL Extract
           </button>
         </div>
-      </section>
-
-      <section className="card section">
-        <div className="section-block-header compact">
-          <div>
-            <p className="section-kicker">Shared</p>
-            <h3 className="card-title">공통 설정</h3>
-          </div>
-          <p className="helper">API Base URL은 모든 탭에서 공통으로 사용됩니다.</p>
-        </div>
-        <label>
-          <span className="label">API Base URL</span>
-          <input className="input" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="http://localhost:8000/api" />
-        </label>
       </section>
 
       {activeTab === 'migration' ? (
