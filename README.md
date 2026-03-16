@@ -34,9 +34,18 @@ scripts\windows\run_uv.bat
 ```
 
 이 스크립트는:
+- 스크립트 위치를 기준으로 프로젝트 루트를 자동 탐색
 - `uv sync`
 - FastAPI backend 실행
-- frontend 의존성 설치 및 dev 서버 실행
+- 최초 실행 시 `frontend/package-lock.json`이 있으면 `npm ci --no-audit --no-fund`로 고정 버전 설치
+- 이미 `frontend/node_modules`가 있으면 다음 실행부터는 frontend 설치를 건너뜀
+- frontend dev 서버 실행
+
+권장 사항:
+- **Node.js 20+** 사용
+- 가능하면 **LTS 버전(Node 20 또는 22)** 사용
+- 스크립트는 다른 디렉터리에서 실행하거나 더블클릭으로 실행해도 동작하도록 작성되어 있습니다.
+- 프론트엔드 재설치가 필요하면 Windows cmd에서 `set FORCE_FRONTEND_INSTALL=1` 후 스크립트를 실행하세요.
 
 ## Linux 실행
 대표 실행 스크립트:
