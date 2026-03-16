@@ -24,8 +24,6 @@ type DbPanelState = {
 };
 
 type Props = {
-  apiBase: string;
-  onApiBaseChange: (value: string) => void;
   source: DbPanelState;
   target: DbPanelState;
   onDbFieldChange: (role: Role, field: 'username' | 'password' | 'url', value: string) => void;
@@ -58,8 +56,6 @@ type Props = {
 };
 
 export default function MigrationTab({
-  apiBase,
-  onApiBaseChange,
   source,
   target,
   onDbFieldChange,
@@ -93,16 +89,13 @@ export default function MigrationTab({
   return (
     <div>
       <section className="card section">
-        <h2 className="section-title">설정</h2>
-        <label>
-          <span className="label">API Base URL</span>
-          <input
-            className="input"
-            value={apiBase}
-            onChange={(e) => onApiBaseChange(e.target.value)}
-            placeholder="http://localhost:8000/api"
-          />
-        </label>
+        <div className="section-block-header">
+          <div>
+            <p className="section-kicker">Tab 1</p>
+            <h2 className="section-title">DB Table Migration</h2>
+          </div>
+          <p className="helper">Source / Target DB 매핑과 실행 제어를 한 화면에서 관리합니다.</p>
+        </div>
       </section>
 
       <section className="grid-2 section">

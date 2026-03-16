@@ -21,8 +21,6 @@ type DdlPanelState = {
 };
 
 type Props = {
-  apiBase: string;
-  onApiBaseChange: (value: string) => void;
   state: DdlPanelState;
   message: string;
   onFieldChange: (field: 'username' | 'password' | 'url' | 'schema' | 'tableName', value: string) => void;
@@ -45,8 +43,6 @@ async function copyText(value: string) {
 }
 
 export default function DdlExtractPanel({
-  apiBase,
-  onApiBaseChange,
   state,
   message,
   onFieldChange,
@@ -65,10 +61,6 @@ export default function DdlExtractPanel({
           </div>
           <p className="helper">단일 DB 연결 기준으로 스키마/테이블을 선택해 DDL을 추출합니다.</p>
         </div>
-        <label>
-          <span className="label">API Base URL</span>
-          <input className="input" value={apiBase} onChange={(e) => onApiBaseChange(e.target.value)} placeholder="http://localhost:8000/api" />
-        </label>
       </section>
 
       <section className="card section ddl-layout">

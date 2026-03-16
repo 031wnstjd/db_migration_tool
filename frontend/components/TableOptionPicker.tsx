@@ -71,6 +71,7 @@ export default function TableOptionPicker({
         placeholder={searchPlaceholder}
         autoComplete="off"
       />
+      <p className="helper">대소문자 구분 없이 검색됩니다.</p>
       <div className="table-picker-results" role="listbox" aria-label={label}>
         {filteredOptions.length > 0 ? (
           filteredOptions.map((option) => (
