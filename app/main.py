@@ -9,7 +9,7 @@ from app.services.repository import init_db
 configure_logging()
 init_db()
 
-app = FastAPI(title="DB Migrator Tool", version="0.3.0")
+app = FastAPI(title="DB Managing Tool", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -53,6 +53,17 @@ def _init_source_target(source_db: Path, target_db: Path) -> None:
         conn.commit()
 
 
+def _wait_for_terminal_job(job_id: str, timeout_seconds: float = 10.0) -> dict | None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        candidate = repository.get_job(job_id)
+        if candidate is not None:
+            if candidate['status'] in {'SUCCESS', 'FAILED', 'CANCELLED'}:
+                return candidate
+        time.sleep(0.05)
+    return repository.get_job(job_id)
+
+
 def test_quote_and_qualified_name_helpers() -> None:
     assert _quote('table') == '"table"'
     assert _fq('public', 'users') == '"public"."users"'
@@ -131,10 +142,43 @@ def test_preview_sql_variants() -> None:
         strategy='DELETE_INSERT',
     )
 
-    assert _preview_sql(insert_cfg)['source_select'] == 'SELECT "id", "name" FROM "main"."a"'
-    assert _preview_sql(insert_cfg)['dml_preview'] == 'INSERT INTO "main"."b" ("id", "name") VALUES (...)'
-    assert _preview_sql(merge_cfg)['dml_preview'] == 'UPSERT "main"."b" USING KEY ("id")'
-    assert _preview_sql(delete_cfg)['dml_preview'] == 'DELETE FROM "main"."b" WHERE "id" = :id; INSERT INTO ...'
+    insert_preview = _preview_sql(insert_cfg)
+    merge_preview = _preview_sql(merge_cfg)
+    delete_preview = _preview_sql(delete_cfg)
+
+    assert insert_preview['source_select'] == 'SELECT main.a.id, main.a.name \nFROM main.a'
+    assert 'INSERT INTO main.b (id, name) VALUES (?, ?)' in insert_preview['dml_preview']
+    assert 'UPDATE main.b SET name=?, age=? WHERE main.b.id = ?' in merge_preview['dml_preview']
+    assert '-- if update affected 0 rows, run INSERT fallback' in merge_preview['dml_preview']
+    assert 'DELETE FROM main.b WHERE main.b.id = ?' in delete_preview['dml_preview']
+
+
+def test_preview_sql_compiles_for_mysql_and_oracle() -> None:
+    cfg = TableMigrationConfig(
+        source_schema='public',
+        source_table='users',
+        target_schema='public',
+        target_table='users',
+        selected_columns=['id', 'name', 'created_at'],
+        key_columns=['id'],
+        strategy='MERGE',
+        date_filter_column='created_at',
+        date_from='2024-01-01',
+        date_to='2024-01-31',
+        row_limit=10,
+    )
+
+    mysql_preview = _preview_sql(cfg, 'mysql+pymysql://user:pass@localhost:3306/demo', 'mysql+pymysql://user:pass@localhost:3306/demo')
+    oracle_preview = _preview_sql(
+        cfg,
+        'oracle+oracledb://user:pass@localhost:1521/?service_name=XEPDB1',
+        'oracle+oracledb://user:pass@localhost:1521/?service_name=XEPDB1',
+    )
+
+    assert ' LIMIT %s' in mysql_preview['source_select']
+    assert 'FETCH FIRST' in oracle_preview['source_select']
+    assert 'SET name=:name, created_at=:created_at' in oracle_preview['dml_preview']
+    assert 'run INSERT fallback' in oracle_preview['dml_preview']
 
 
 def test_start_job_and_dry_run_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,16 +204,11 @@ def test_start_job_and_dry_run_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     service = MigrationService()
     job_id = service.start_job(req)
 
-    final_job = None
-    for _ in range(50):
-        candidate = repository.get_job(job_id)
-        if candidate is not None and candidate['status'] == 'SUCCESS':
-            final_job = candidate
-            break
-        time.sleep(0.05)
+    service.wait_for_job(job_id, timeout=5.0)
+    final_job = _wait_for_terminal_job(job_id)
 
     assert final_job is not None
-    service.wait_for_job(job_id, timeout=1.0)
+    assert final_job['status'] == 'SUCCESS'
     assert final_job['result_json']['tables'][0]['dry_run'] is True
     assert db_file.exists()
 
@@ -202,16 +241,11 @@ def test_actual_merge_flow_with_sqlite(tmp_path: Path, monkeypatch: pytest.Monke
     service = MigrationService()
     job_id = service.start_job(req)
 
-    final_job = None
-    for _ in range(80):
-        candidate = repository.get_job(job_id)
-        if candidate is not None and candidate['status'] == 'SUCCESS':
-            final_job = candidate
-            break
-        time.sleep(0.05)
+    service.wait_for_job(job_id, timeout=5.0)
+    final_job = _wait_for_terminal_job(job_id)
 
     assert final_job is not None
-    service.wait_for_job(job_id, timeout=1.0)
+    assert final_job['status'] == 'SUCCESS'
     assert final_job['result_json']['tables'][0]['migrated_rows'] == 3
 
     with sqlite3.connect(target_db) as conn:

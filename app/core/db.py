@@ -12,7 +12,14 @@ def _normalize_url(url: str) -> str:
         return raw
     if raw.endswith('.db') or raw.startswith('./') or raw.startswith('/'):
         return f'sqlite:///{raw}'
-    raise ValueError('database url must include a dialect prefix such as sqlite:/// or postgresql://')
+    raise ValueError(
+        'database url must include a dialect prefix such as sqlite:///, postgresql+psycopg://, mysql+pymysql://, or oracle+oracledb://'
+    )
+
+
+def get_dialect_name(url: str) -> str:
+    parsed = make_url(_normalize_url(url))
+    return parsed.get_backend_name()
 
 
 def build_engine_url(url: str, username: str | None = None, password: str | None = None) -> str:

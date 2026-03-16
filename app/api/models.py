@@ -32,6 +32,15 @@ class ColumnsRequest(DBConfig):
     table_name: str
 
 
+class DdlExtractRequest(DBConfig):
+    schema_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices('schema', 'schema_name'),
+        serialization_alias='schema',
+    )
+    table_name: str
+
+
 class ColumnMaskRule(BaseModel):
     column_name: str
     mode: Literal['NONE', 'NULL', 'FIXED', 'HASH', 'PARTIAL'] = 'NONE'

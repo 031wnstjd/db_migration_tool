@@ -2,6 +2,8 @@ import {
   ApiResponse,
   ColumnMetadata,
   DBConfig,
+  DdlExtractRequest,
+  DdlExtractResponse,
   JobRecord,
   JobStartRequest,
   TableMigrationConfig,
@@ -11,6 +13,10 @@ let BASE_URL = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, '') || 'http://l
 
 export function setApiBaseUrl(url: string) {
   BASE_URL = url?.replace(/\/$/, '') || 'http://localhost:8000/api';
+}
+
+function getOriginBaseUrl() {
+  return BASE_URL.replace(/\/api$/, '');
 }
 
 function toErrorMessage(err: unknown): string {
@@ -86,6 +92,30 @@ export async function fetchColumns(
     method: 'POST',
     body: JSON.stringify({ ...db, schema, table_name: tableName }),
   });
+}
+
+export async function fetchDdl(payload: DdlExtractRequest): Promise<ApiResponse<DdlExtractResponse>> {
+  return apiRequest('/metadata/ddl', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function inspectBackendDdlSupport(): Promise<{ title: string; hasDdlRoute: boolean } | null> {
+  try {
+    const res = await fetch(`${getOriginBaseUrl()}/openapi.json`);
+    if (!res.ok) {
+      return null;
+    }
+    const payload = (await res.json()) as { info?: { title?: string }; paths?: Record<string, unknown> };
+    const paths = payload?.paths || {};
+    return {
+      title: payload?.info?.title || '',
+      hasDdlRoute: Boolean(paths['/api/metadata/ddl'] || paths['/api/metadata/ddl/']),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function startJob(payload: JobStartRequest): Promise<ApiResponse<{ job_id: string }>> {

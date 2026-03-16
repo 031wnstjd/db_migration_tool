@@ -38,6 +38,35 @@ export type JobStartRequest = {
   dry_run: boolean;
 };
 
+export type DdlExtractResult = {
+  dialect: string;
+  schema: string | null;
+  table_name: string;
+  combined_sql: string;
+  table_sql: string;
+  index_sql: string;
+  constraint_sql: string;
+  partition_sql: string;
+  warnings: string[];
+};
+
+export type DdlExtractRequest = DBConfig & {
+  schema?: string | null;
+  table_name: string;
+};
+
+export type DdlExtractResponse = {
+  dialect: string;
+  schema: string | null;
+  table_name: string;
+  table_sql: string;
+  index_sql: string;
+  constraint_sql: string;
+  partition_sql: string;
+  combined_sql: string;
+  warnings: string[];
+};
+
 export type ApiResponse<T = unknown> = {
   success: boolean;
   message: string;

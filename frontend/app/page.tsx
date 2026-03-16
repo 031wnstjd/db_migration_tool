@@ -5,27 +5,41 @@ import {
   buildRequestPayload,
   cancelJob,
   fetchColumns,
+  fetchDdl,
   fetchTables,
   getJob,
   getJobs,
+  inspectBackendDdlSupport,
   setApiBaseUrl,
   startJob,
   testConnection,
 } from '../lib/api';
+import MigrationTab from '../components/MigrationTab';
+import DdlExtractPanel from '../components/DdlExtractPanel';
 import { coerceJobConfig, intersectColumns } from '../lib/mappers';
-import { ApiResponse, DBConfig, JobRecord } from '../lib/types';
-import TableMappingCard, { MappingCardPayload } from '../components/TableMappingCard';
-import ConnectionPanel from '../components/ConnectionPanel';
-import JobControlPanel from '../components/JobControlPanel';
-import JobStatusPanel from '../components/JobStatusPanel';
+import { ApiResponse, DBConfig, DdlExtractResponse, JobRecord } from '../lib/types';
+import { MappingCardPayload } from '../components/TableMappingCard';
 
 type SourceOrTarget = 'source' | 'target';
 type TestStatus = 'idle' | 'success' | 'error';
+type AppTab = 'migration' | 'ddl';
 
 type DBState = DBConfig & {
   testMessage: string;
   testStatus: TestStatus;
   testing: boolean;
+};
+
+type DdlState = DBConfig & {
+  schema: string;
+  tableName: string;
+  testMessage: string;
+  testStatus: TestStatus;
+  testing: boolean;
+  loadingTables: boolean;
+  extracting: boolean;
+  tables: string[];
+  result: DdlExtractResponse | null;
 };
 
 const BASE_STATE: DBState = {
@@ -35,6 +49,21 @@ const BASE_STATE: DBState = {
   testMessage: '',
   testStatus: 'idle',
   testing: false,
+};
+
+const BASE_DDL_STATE: DdlState = {
+  username: '',
+  password: '',
+  url: '',
+  schema: '',
+  tableName: '',
+  testMessage: '',
+  testStatus: 'idle',
+  testing: false,
+  loadingTables: false,
+  extracting: false,
+  tables: [],
+  result: null,
 };
 
 const getDefaultDbState = (role: SourceOrTarget): DBState => {
@@ -62,7 +91,7 @@ const getDefaultDbState = (role: SourceOrTarget): DBState => {
   };
 };
 
-const toDbConfig = ({ username, password, url }: DBState): DBConfig => ({
+const toDbConfig = ({ username, password, url }: DBState | DdlState): DBConfig => ({
   username,
   password,
   url,
@@ -96,7 +125,7 @@ const newMapping = (): MappingCardPayload => ({
   target_columns: [],
   source_pks: [],
   source_dates: [],
-  });
+});
 
 type MappingLoadState = {
   sourceTables: boolean;
@@ -108,14 +137,17 @@ const toErrorMessage = (resp: ApiResponse<unknown>) =>
   !resp.success && (resp.errors?.join('\n') || resp.message || '요청이 실패했습니다.');
 
 export default function HomePage() {
+  const [activeTab, setActiveTab] = useState<AppTab>('migration');
   const [apiBase, setApiBase] = useState(() => process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api');
   const [source, setSource] = useState<DBState>(getDefaultDbState('source'));
   const [target, setTarget] = useState<DBState>(getDefaultDbState('target'));
+  const [ddl, setDdl] = useState<DdlState>(BASE_DDL_STATE);
   const [mappings, setMappings] = useState<MappingCardPayload[]>([newMapping()]);
   const [running, setRunning] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [mappingLoadState, setMappingLoadState] = useState<Record<string, MappingLoadState>>({});
-  const [message, setMessage] = useState('');
+  const [migrationMessage, setMigrationMessage] = useState('');
+  const [ddlMessage, setDdlMessage] = useState('');
 
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState<JobRecord | null>(null);
@@ -130,7 +162,7 @@ export default function HomePage() {
   }, [apiBase]);
 
   useEffect(() => {
-    refreshJobs();
+    void refreshJobs();
     return () => {
       pollStopRef.current = true;
     };
@@ -143,6 +175,17 @@ export default function HomePage() {
       [field]: value,
       testMessage: '',
       testStatus: 'idle',
+    }));
+  };
+
+  const updateDdl = (field: 'username' | 'password' | 'url' | 'schema' | 'tableName', value: string) => {
+    setDdl((prev) => ({
+      ...prev,
+      [field]: value,
+      testMessage: field === 'tableName' ? prev.testMessage : '',
+      testStatus: field === 'tableName' ? prev.testStatus : 'idle',
+      result: null,
+      tables: field === 'schema' ? [] : prev.tables,
     }));
   };
 
@@ -192,6 +235,13 @@ export default function HomePage() {
     });
   };
 
+  const removeLastMapping = () => {
+    const last = mappings[mappings.length - 1];
+    if (last) {
+      removeMapping(last.id);
+    }
+  };
+
   const onTestConnection = async (role: SourceOrTarget) => {
     const current = role === 'source' ? source : target;
     const setter = role === 'source' ? setSource : setTarget;
@@ -210,12 +260,36 @@ export default function HomePage() {
         testStatus: err ? 'error' : 'success',
         testMessage: err || `성공: ${res.data?.db_name || '연결 테스트 완료'}`,
       }));
-      setMessage(err || `${roleLabel} 연결 테스트 완료`);
+      setMigrationMessage(`${roleLabel}: ${err || '연결 테스트 완료'}`);
     } catch {
       setter((prev) => ({ ...prev, testMessage: '연결 테스트 실패', testStatus: 'error' }));
-      setMessage(`${roleLabel} 연결 테스트 실패`);
+      setMigrationMessage(`${roleLabel}: 연결 테스트 실패`);
     } finally {
       setter((prev) => ({ ...prev, testing: false }));
+    }
+  };
+
+  const onTestDdlConnection = async () => {
+    if (!ddl.url.trim()) {
+      setDdl((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.', testStatus: 'error' }));
+      return;
+    }
+
+    setDdl((prev) => ({ ...prev, testing: true, testMessage: '', testStatus: 'idle' }));
+    try {
+      const res = await testConnection(toDbConfig(ddl));
+      const err = toErrorMessage(res);
+      setDdl((prev) => ({
+        ...prev,
+        testStatus: err ? 'error' : 'success',
+        testMessage: err || `성공: ${res.data?.db_name || '연결 테스트 완료'}`,
+      }));
+      setDdlMessage(`DDL 대상 DB: ${err || '연결 테스트 완료'}`);
+    } catch {
+      setDdl((prev) => ({ ...prev, testMessage: '연결 테스트 실패', testStatus: 'error' }));
+      setDdlMessage('DDL 대상 DB: 연결 테스트 실패');
+    } finally {
+      setDdl((prev) => ({ ...prev, testing: false }));
     }
   };
 
@@ -230,7 +304,7 @@ export default function HomePage() {
     try {
       const res = await fetchTables(toDbConfig(db), schema || '');
       if (!res.success || !res.data) {
-        setMessage(toErrorMessage(res) || '테이블 조회 실패');
+        setMigrationMessage(toErrorMessage(res) || '테이블 조회 실패');
         return;
       }
 
@@ -238,7 +312,7 @@ export default function HomePage() {
       if (res.data.tables.length > 0) {
         updateMapping(mappingId, role === 'source' ? 'source_table' : 'target_table', res.data.tables[0]);
       }
-      setMessage('테이블 조회 완료');
+      setMigrationMessage('테이블 조회 완료');
     } finally {
       setMappingBusy(mappingId, isSource ? { sourceTables: false } : { targetTables: false });
     }
@@ -248,7 +322,7 @@ export default function HomePage() {
     const row = mappings.find((m) => m.id === mappingId);
     if (!row) return;
     if (!row.source_table || !row.target_table) {
-      setMessage('Source/Target table을 먼저 입력해 주세요.');
+      setMigrationMessage('Source/Target table을 먼저 입력해 주세요.');
       return;
     }
 
@@ -259,7 +333,7 @@ export default function HomePage() {
     ]);
     try {
       if (!src.success || !src.data || !tgt.success || !tgt.data) {
-        setMessage(toErrorMessage(src) || toErrorMessage(tgt) || '컬럼 조회 실패');
+        setMigrationMessage(toErrorMessage(src) || toErrorMessage(tgt) || '컬럼 조회 실패');
         return;
       }
 
@@ -288,41 +362,99 @@ export default function HomePage() {
       updateMapping(
         mappingId,
         'masks',
-        (row.masks || []).filter((mask) => selected.includes(mask.column_name))
-          .map((mask) => ({
-            ...mask,
-            mode: mask.mode || 'NONE',
-          })),
+        (row.masks || []).filter((mask) => selected.includes(mask.column_name)).map((mask) => ({
+          ...mask,
+          mode: mask.mode || 'NONE',
+        })),
       );
 
-      setMessage('컬럼/PK 조회 완료');
+      setMigrationMessage('컬럼/PK 조회 완료');
     } finally {
       setMappingBusy(mappingId, { columns: false });
+    }
+  };
+
+  const loadDdlTables = async () => {
+    if (!ddl.url.trim()) {
+      setDdl((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.', testStatus: 'error' }));
+      return;
+    }
+
+    setDdl((prev) => ({ ...prev, loadingTables: true }));
+    try {
+      const res = await fetchTables(toDbConfig(ddl), ddl.schema || '');
+      if (!res.success || !res.data) {
+        setDdlMessage(toErrorMessage(res) || 'DDL 대상 테이블 조회 실패');
+        return;
+      }
+      setDdl((prev) => ({
+        ...prev,
+        tables: res.data?.tables || [],
+        tableName: prev.tableName || res.data?.tables?.[0] || '',
+      }));
+      setDdlMessage('DDL 대상 테이블 조회 완료');
+    } finally {
+      setDdl((prev) => ({ ...prev, loadingTables: false }));
+    }
+  };
+
+  const extractDdl = async () => {
+    if (!ddl.url.trim()) {
+      setDdlMessage('DDL 추출용 Database URL을 입력해 주세요.');
+      return;
+    }
+    if (!ddl.tableName.trim()) {
+      setDdlMessage('DDL을 추출할 테이블명을 입력해 주세요.');
+      return;
+    }
+
+    setDdl((prev) => ({ ...prev, extracting: true, result: null }));
+    try {
+      const res = await fetchDdl({
+        ...toDbConfig(ddl),
+        schema: ddl.schema || null,
+        table_name: ddl.tableName,
+      });
+      if (!res.success || !res.data) {
+        const errorMessage = toErrorMessage(res) || 'DDL 추출 실패';
+        if (errorMessage.includes('HTTP 404')) {
+          const backendInfo = await inspectBackendDdlSupport();
+          if (backendInfo && !backendInfo.hasDdlRoute) {
+            setDdlMessage(
+              `현재 연결된 백엔드${backendInfo.title ? `(${backendInfo.title})` : ''}는 DDL 추출 API가 없는 구버전입니다. 백엔드를 재시작하거나 docker compose up -d --build backend frontend 로 다시 올리면 DDL 추출이 가능합니다.`,
+            );
+          } else {
+            setDdlMessage('DDL 추출 API를 찾을 수 없습니다. 백엔드를 최신 코드로 재시작했는지 확인해 주세요.');
+          }
+        } else {
+          setDdlMessage(errorMessage);
+        }
+        return;
+      }
+      setDdl((prev) => ({ ...prev, result: res.data }));
+      setDdlMessage('DDL 추출 완료');
+    } finally {
+      setDdl((prev) => ({ ...prev, extracting: false }));
     }
   };
 
   const buildConfigs = () => {
     const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00`));
 
-    const missing = mappings.find(
-      (m) =>
-        !m.source_table.trim() ||
-        !m.target_table.trim() ||
-        m.selected_columns.length === 0,
-    );
+    const missing = mappings.find((m) => !m.source_table.trim() || !m.target_table.trim() || m.selected_columns.length === 0);
 
     if (!source.url.trim() || !target.url.trim()) {
-      setMessage('Source/Target Database URL을 입력해 주세요.');
+      setMigrationMessage('Source/Target Database URL을 입력해 주세요.');
       return null;
     }
 
     if (!mappings.length) {
-      setMessage('최소 하나의 매핑이 필요합니다.');
+      setMigrationMessage('최소 하나의 매핑이 필요합니다.');
       return null;
     }
 
     if (missing) {
-      setMessage('모든 매핑에서 Source/Target table과 공통 컬럼을 설정해 주세요.');
+      setMigrationMessage('모든 매핑에서 Source/Target table과 공통 컬럼을 설정해 주세요.');
       return null;
     }
 
@@ -355,7 +487,7 @@ export default function HomePage() {
       });
       return cfgs;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '매핑 설정이 올바르지 않습니다.');
+      setMigrationMessage(error instanceof Error ? error.message : '매핑 설정이 올바르지 않습니다.');
       return null;
     }
   };
@@ -369,30 +501,17 @@ export default function HomePage() {
         return;
       }
     }
-    const payload = buildRequestPayload(
-      {
-        username: source.username,
-        password: source.password,
-        url: source.url,
-      },
-      {
-        username: target.username,
-        password: target.password,
-        url: target.url,
-      },
-      configs,
-      dryRun,
-    );
+    const payload = buildRequestPayload(toDbConfig(source), toDbConfig(target), configs, dryRun);
 
     try {
       setRunning(true);
       const res = await startJob(payload);
       if (!res.success || !res.data?.job_id) {
-        setMessage(toErrorMessage(res) || '작업 시작 실패');
+        setMigrationMessage(toErrorMessage(res) || '작업 시작 실패');
         return;
       }
       setJobId(res.data.job_id);
-      setMessage(`${dryRun ? 'Dry Run' : '실행'} 시작: ${res.data.job_id}`);
+      setMigrationMessage(`${dryRun ? 'Dry Run' : '실행'} 시작: ${res.data.job_id}`);
       await loadJob(res.data.job_id);
       setPollingJobId(res.data.job_id);
       await refreshJobs();
@@ -404,7 +523,7 @@ export default function HomePage() {
   const cancelCurrentJob = async () => {
     const targetId = (pollingJobId || job?.job_id || jobId).trim();
     if (!targetId) {
-      setMessage('취소할 Job ID를 입력해 주세요.');
+      setMigrationMessage('취소할 Job ID를 입력해 주세요.');
       return;
     }
 
@@ -412,10 +531,10 @@ export default function HomePage() {
       setCanceling(true);
       const res = await cancelJob(targetId);
       if (!res.success) {
-        setMessage(toErrorMessage(res) || 'Job 취소 실패');
+        setMigrationMessage(toErrorMessage(res) || 'Job 취소 실패');
         return;
       }
-      setMessage(`Job 취소 요청: ${targetId}`);
+      setMigrationMessage(`Job 취소 요청: ${targetId}`);
       await loadJob(targetId);
     } finally {
       setCanceling(false);
@@ -425,7 +544,7 @@ export default function HomePage() {
   const loadJob = async (id?: string | null) => {
     const targetId = typeof id === 'string' ? id.trim() : jobId.trim();
     if (!targetId) {
-      setMessage('조회할 Job ID를 입력해 주세요.');
+      setMigrationMessage('조회할 Job ID를 입력해 주세요.');
       return;
     }
 
@@ -434,12 +553,12 @@ export default function HomePage() {
       const res = await getJob(targetId);
       if (!res.success || !res.data) {
         setJob(null);
-        setMessage(toErrorMessage(res) || 'Job 조회 실패');
+        setMigrationMessage(toErrorMessage(res) || 'Job 조회 실패');
         return;
       }
       const next = res.data;
       setJob(next);
-      setMessage(`Job 상태: ${next.status}`);
+      setMigrationMessage(`Job 상태: ${next.status}`);
       setPollingJobId((prev) =>
         ['RUNNING', 'PENDING', 'CANCEL_REQUESTED'].includes(next.status) ? targetId : prev === targetId ? null : prev,
       );
@@ -485,7 +604,7 @@ export default function HomePage() {
       } catch (error) {
         retryCount += 1;
         if (retryCount >= 3) {
-          setMessage(error instanceof Error ? error.message : 'Job 조회에 실패했습니다.');
+          setMigrationMessage(error instanceof Error ? error.message : 'Job 조회에 실패했습니다.');
           setPollingJobId(null);
           return;
         }
@@ -504,144 +623,99 @@ export default function HomePage() {
 
   const isJobActive = Boolean(pollingJobId || ['RUNNING', 'PENDING', 'CANCEL_REQUESTED'].includes(job?.status || ''));
   const uiBusy = running || isJobActive;
+  const requestPreview = {
+    source_db: {
+      ...toDbConfig(source),
+      password: '***',
+    },
+    target_db: {
+      ...toDbConfig(target),
+      password: '***',
+    },
+    table_configs: mappings.map((row) => coerceJobConfig(row)),
+    dry_run: true,
+  };
 
   return (
     <div>
       <section className="card section">
-        <h2 className="section-title">설정</h2>
-        <label>
-          <span className="label">FastAPI Base URL</span>
-          <input
-            className="input"
-            value={apiBase}
-            onChange={(e) => {
-              setApiBase(e.target.value);
-            }}
-            placeholder="http://localhost:8000/api"
-          />
-        </label>
-      </section>
-
-      <section className="grid-2 section">
-        <ConnectionPanel
-          role="source"
-          username={source.username}
-          password={source.password}
-          url={source.url}
-          testMessage={source.testMessage}
-          testStatus={source.testStatus}
-          onFieldChange={updateDb}
-          onTest={onTestConnection}
-          disabled={uiBusy}
-          testInFlight={source.testing}
-        />
-        <ConnectionPanel
-          role="target"
-          username={target.username}
-          password={target.password}
-          url={target.url}
-          testMessage={target.testMessage}
-          testStatus={target.testStatus}
-          onFieldChange={updateDb}
-          onTest={onTestConnection}
-          disabled={uiBusy}
-          testInFlight={target.testing}
-        />
-      </section>
-
-      <div className="flex-gap" style={{ justifyContent: 'space-between', marginBottom: '0.6rem' }}>
-        <h2 className="section-title">테이블 매핑 설정</h2>
-        <div className="flex-gap">
-          <button className="btn" type="button" onClick={addMapping} disabled={uiBusy}>
-            매핑 추가
+        <div className="section-header-row compact">
+          <div>
+            <h2 className="section-title">작업 선택</h2>
+            <p className="helper">동일한 디자인 언어 안에서 마이그레이션과 DDL 추출 기능을 탭으로 전환합니다.</p>
+          </div>
+        </div>
+        <div className="tool-tabs" role="tablist" aria-label="DB managing tool tabs">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'migration'}
+            className={`tab-button ${activeTab === 'migration' ? 'active' : ''}`}
+            onClick={() => setActiveTab('migration')}
+          >
+            DB Table Migration
           </button>
-          <button className="btn" type="button" onClick={() => removeMapping(mappings[mappings.length - 1].id)} disabled={uiBusy}>
-            마지막 매핑 제거
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'ddl'}
+            className={`tab-button ${activeTab === 'ddl' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ddl')}
+          >
+            DB Table DDL Extract
           </button>
         </div>
-      </div>
+      </section>
 
-      {mappings.map((cfg, index) => (
-        <TableMappingCard
-          key={cfg.id}
-          index={index}
-          cfg={cfg}
-          disableActions={uiBusy}
-          loading={getMappingBusy(cfg.id)}
-          onUpdate={updateMapping}
+      {activeTab === 'migration' ? (
+        <MigrationTab
+          apiBase={apiBase}
+          onApiBaseChange={setApiBase}
+          source={source}
+          target={target}
+          onDbFieldChange={updateDb}
+          onTestConnection={onTestConnection}
+          uiBusy={uiBusy}
+          mappings={mappings}
+          getMappingBusy={getMappingBusy}
+          onUpdateMapping={updateMapping}
           onFetchTables={loadSchemaTables}
           onFetchColumns={loadColumnsAndKeys}
-          onRemove={removeMapping}
-        />
-      ))}
-
-      <section className="grid-2 section">
-        <JobControlPanel
-          inFlight={uiBusy}
-          onRunDry={() => runJob(true)}
-          onRunReal={() => runJob(false)}
-          onRefreshList={refreshJobs}
-          onCancel={cancelCurrentJob}
-          canCancel={isJobActive}
+          onRemoveMapping={removeMapping}
+          onAddMapping={addMapping}
+          onRemoveLastMapping={removeLastMapping}
+          canRemoveLastMapping={mappings.length > 1}
+          onRunDry={() => void runJob(true)}
+          onRunReal={() => void runJob(false)}
+          onRefreshJobs={() => void refreshJobs()}
+          onCancelJob={() => void cancelCurrentJob()}
+          canCancelJob={isJobActive}
           cancelInFlight={canceling}
+          jobId={jobId}
+          onJobIdChange={setJobId}
+          onLoadJob={() => loadJob()}
+          loadingJob={loadingJob}
+          job={job}
+          message={migrationMessage}
+          requestPreview={requestPreview}
+          recentJobs={recentJobs}
+          onSelectRecentJob={(nextJobId) => {
+            setJobId(nextJobId);
+            void loadJob(nextJobId);
+          }}
         />
-        <JobStatusPanel jobId={jobId} onJobIdChange={setJobId} onLoad={loadJob} loading={loadingJob} job={job} />
-      </section>
-
-      {message ? (
-        <section className="card section">
-          <h3 className="card-title">알림</h3>
-          <p className="helper" aria-live="polite">
-            {message}
-          </p>
-        </section>
-      ) : null}
-
-      <section className="card section">
-        <h3 className="card-title">요청 미리보기</h3>
-        <pre className="code">
-          {JSON.stringify(
-            {
-              source_db: {
-                ...toDbConfig(source),
-                password: '***',
-              },
-              target_db: {
-                ...toDbConfig(target),
-                password: '***',
-              },
-              table_configs: mappings.map((row) => coerceJobConfig(row)),
-              dry_run: true,
-            },
-            null,
-            2,
-          )}
-        </pre>
-      </section>
-
-      {recentJobs.length > 0 && (
-        <section className="card section">
-          <h3 className="card-title">최근 Job</h3>
-          <ul className="helper">
-            {recentJobs.slice(0, 5).map((item) => (
-              <li className="flex-gap" key={item.job_id}>
-                <span>
-                  {item.job_id} / {item.status} / {item.progress}%
-                </span>
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={() => {
-                    setJobId(item.job_id);
-                    void loadJob(item.job_id);
-                  }}
-                >
-                  조회
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+      ) : (
+        <DdlExtractPanel
+          apiBase={apiBase}
+          onApiBaseChange={setApiBase}
+          state={ddl}
+          message={ddlMessage}
+          onFieldChange={updateDdl}
+          onTestConnection={() => void onTestDdlConnection()}
+          onLoadTables={() => void loadDdlTables()}
+          onExtractDdl={() => void extractDdl()}
+          disabled={ddl.extracting}
+        />
       )}
     </div>
   );

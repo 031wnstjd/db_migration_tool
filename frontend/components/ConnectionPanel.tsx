@@ -75,7 +75,7 @@ export default function ConnectionPanel({
         <input
           className="input"
           value={url}
-          placeholder="sqlite:///./data/source.db 또는 postgresql://..."
+          placeholder="mysql+pymysql://... / oracle+oracledb://... / postgresql+psycopg://... / sqlite:///..."
           onChange={onInput('url')}
           disabled={disabled}
           autoComplete="off"

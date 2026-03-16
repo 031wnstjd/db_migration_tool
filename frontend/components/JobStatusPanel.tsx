@@ -13,13 +13,18 @@ type Props = {
 export default function JobStatusPanel({ jobId, onJobIdChange, onLoad, loading, job }: Props) {
   return (
     <section className="card panel">
-      <h3 className="card-title">진행률/결과 조회</h3>
-      <div className="grid-2">
+      <div className="section-block-header compact">
+        <div>
+          <p className="section-kicker">Job Lookup</p>
+          <h3 className="card-title">진행률 / 결과 조회</h3>
+        </div>
+      </div>
+      <div className="job-status-form">
         <label>
           <span className="label">Job ID</span>
           <input className="input" value={jobId} onChange={(e) => onJobIdChange(e.target.value)} placeholder="Job ID 입력" />
         </label>
-        <div className="flex-gap" style={{ alignItems: 'end' }}>
+        <div className="action-row align-end">
           <button className="btn primary" type="button" onClick={() => void onLoad()} disabled={loading || !jobId.trim()}>
             {loading ? '조회 중…' : '진행률 조회'}
           </button>

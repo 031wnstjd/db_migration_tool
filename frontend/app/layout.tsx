@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'DB Migrator Tool',
-  description: 'DB-agnostic 데이터 마이그레이션 프론트엔드',
+  title: 'DB Managing Tool',
+  description: 'DB migration and DDL management workspace',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -13,10 +13,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="page">
           <header className="container header">
             <div>
-              <h1 className="page-title">DB MIGRATOR TOOL</h1>
-              <p className="helper">Neo Brutalism UI로 리디자인</p>
+              <h1 className="page-title">DB MANAGING TOOL</h1>
+              <p className="helper">Migration과 DDL 작업을 한 곳에서 관리합니다.</p>
             </div>
-            <span className="header-chip">FastAPI + Next.js</span>
           </header>
           <main className="container">{children}</main>
         </div>

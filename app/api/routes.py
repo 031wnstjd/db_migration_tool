@@ -4,7 +4,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.models import ApiResponse, ColumnsRequest, ConnectionTestRequest, JobStartRequest, TablesRequest
+from app.api.models import ApiResponse, ColumnsRequest, ConnectionTestRequest, DdlExtractRequest, JobStartRequest, TablesRequest
+from app.services.ddl_service import DdlService
 from app.services import repository
 from app.services.metadata_service import MetadataService
 from app.services.migration_service import MigrationService
@@ -13,6 +14,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 metadata_service = MetadataService()
 migration_service = MigrationService()
+ddl_service = DdlService()
 
 
 @router.get('/health', response_model=ApiResponse)
@@ -54,6 +56,17 @@ def get_columns(request: ColumnsRequest) -> ApiResponse:
     except Exception as exc:
         logger.exception('Load columns failed')
         return ApiResponse(success=False, message='Failed to load columns', errors=[str(exc)])
+
+
+@router.post('/metadata/ddl', response_model=ApiResponse)
+@router.post('/metadata/ddl/', response_model=ApiResponse, include_in_schema=False)
+def extract_ddl(request: DdlExtractRequest) -> ApiResponse:
+    try:
+        ddl = ddl_service.extract_table_ddl(request.username, request.password, request.url, request.schema_name, request.table_name)
+        return ApiResponse(success=True, message='DDL extracted', data=ddl)
+    except Exception as exc:
+        logger.exception('DDL extraction failed')
+        return ApiResponse(success=False, message='Failed to extract DDL', errors=[str(exc)])
 
 
 @router.post('/jobs/start', response_model=ApiResponse)

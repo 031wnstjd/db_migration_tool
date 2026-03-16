@@ -8,11 +8,12 @@ import uuid
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import MetaData, Table, and_, delete, insert, select, update
+from sqlalchemy import Column, MetaData, String, Table, and_, bindparam, delete, insert, select, update
+from sqlalchemy.dialects import mysql, oracle, postgresql, sqlite
 from sqlalchemy.exc import NoSuchTableError
 
 from app.api.models import ColumnMaskRule, JobStartRequest, TableMigrationConfig
-from app.core.db import create_db_engine, qualified_name, quote_identifier
+from app.core.db import create_db_engine, get_dialect_name, qualified_name, quote_identifier
 from app.services import repository
 
 logger = logging.getLogger(__name__)
@@ -68,24 +69,65 @@ def _mask_row(row: tuple[Any, ...], columns: list[str], masks: list[ColumnMaskRu
     return tuple(out)
 
 
-def _preview_sql(cfg: TableMigrationConfig) -> dict[str, str]:
+def _preview_dialect(url: str | None):
+    dialect_name = get_dialect_name(url or 'sqlite://') if url else 'sqlite'
+    if dialect_name == 'oracle':
+        return oracle.dialect()
+    if dialect_name == 'mysql':
+        return mysql.dialect()
+    if dialect_name == 'postgresql':
+        return postgresql.dialect()
+    return sqlite.dialect()
+
+
+def _preview_table(schema: str | None, table_name: str, columns: list[str]) -> Table:
+    metadata = MetaData()
+    unique_columns = list(dict.fromkeys(columns))
+    return Table(table_name, metadata, *[Column(column_name, String()) for column_name in unique_columns], schema=(schema or '').strip() or None)
+
+
+def _preview_sql(cfg: TableMigrationConfig, source_url: str | None = None, target_url: str | None = None) -> dict[str, str]:
     selected = cfg.selected_columns
-    cols = ', '.join(_quote(c) for c in selected)
-    binds: dict[str, Any] = {}
-    where_sql = _build_where(cfg, binds)
-    source_select = f'SELECT {cols} FROM {_fq(cfg.source_schema, cfg.source_table)}{where_sql}'
+    source_columns = selected + ([cfg.date_filter_column] if cfg.date_filter_column else [])
+    target_columns = list(dict.fromkeys(selected + cfg.key_columns))
+    source_table = _preview_table(cfg.source_schema, cfg.source_table, source_columns)
+    target_table = _preview_table(cfg.target_schema, cfg.target_table, target_columns)
+
+    source_stmt = select(*[source_table.c[column_name] for column_name in selected])
+    if cfg.date_filter_column and cfg.date_from:
+        source_stmt = source_stmt.where(source_table.c[cfg.date_filter_column] >= bindparam('date_from'))
+    if cfg.date_filter_column and cfg.date_to:
+        source_stmt = source_stmt.where(source_table.c[cfg.date_filter_column] < bindparam('date_to_exclusive'))
     if cfg.row_limit:
-        source_select += f' LIMIT {cfg.row_limit}'
+        source_stmt = source_stmt.limit(cfg.row_limit)
+
+    source_select = str(source_stmt.compile(dialect=_preview_dialect(source_url)))
+    insert_stmt = insert(target_table).values({column_name: bindparam(column_name) for column_name in selected})
 
     if cfg.strategy == 'INSERT':
-        dml = f'INSERT INTO {_fq(cfg.target_schema, cfg.target_table)} ({cols}) VALUES (...)'
+        dml = str(insert_stmt.compile(dialect=_preview_dialect(target_url)))
     elif cfg.strategy == 'DELETE_INSERT':
-        key_expr = ' AND '.join([f'{_quote(k)} = :{k.lower()}' for k in cfg.key_columns])
-        dml = f'DELETE FROM {_fq(cfg.target_schema, cfg.target_table)} WHERE {key_expr}; INSERT INTO ...'
+        delete_stmt = delete(target_table).where(and_(*[target_table.c[key] == bindparam(key) for key in cfg.key_columns]))
+        dml = '\n'.join(
+            [
+                str(delete_stmt.compile(dialect=_preview_dialect(target_url))),
+                str(insert_stmt.compile(dialect=_preview_dialect(target_url))),
+            ]
+        )
     else:
-        key_expr = ', '.join(_quote(k) for k in cfg.key_columns)
-        dml = f'UPSERT {_fq(cfg.target_schema, cfg.target_table)} USING KEY ({key_expr})'
-    return {'source_select': source_select, 'dml_preview': dml}
+        update_values = {column_name: bindparam(column_name) for column_name in selected if column_name not in cfg.key_columns}
+        update_stmt = update(target_table).where(and_(*[target_table.c[key] == bindparam(key) for key in cfg.key_columns])).values(
+            **update_values
+        )
+        dml = '\n'.join(
+            [
+                str(update_stmt.compile(dialect=_preview_dialect(target_url))),
+                '-- if update affected 0 rows, run INSERT fallback',
+                str(insert_stmt.compile(dialect=_preview_dialect(target_url))),
+            ]
+        )
+
+    return {'source_select': source_select.strip(), 'dml_preview': dml.strip()}
 
 
 def _parse_date(value: str) -> date:
@@ -171,7 +213,7 @@ class MigrationService:
                 self._threads.pop(job_id, None)
 
     def _run_single_table(self, job_id: str, request: JobStartRequest, cfg: TableMigrationConfig) -> dict[str, Any]:
-        preview = _preview_sql(cfg)
+        preview = _preview_sql(cfg, request.source_db.url, request.target_db.url)
         source_label = _fq(cfg.source_schema, cfg.source_table)
         target_label = _fq(cfg.target_schema, cfg.target_table)
 
