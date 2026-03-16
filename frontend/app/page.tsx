@@ -20,9 +20,11 @@ import JobControlPanel from '../components/JobControlPanel';
 import JobStatusPanel from '../components/JobStatusPanel';
 
 type SourceOrTarget = 'source' | 'target';
+type TestStatus = 'idle' | 'success' | 'error';
 
 type DBState = DBConfig & {
   testMessage: string;
+  testStatus: TestStatus;
   testing: boolean;
 };
 
@@ -31,6 +33,7 @@ const BASE_STATE: DBState = {
   password: '',
   url: '',
   testMessage: '',
+  testStatus: 'idle',
   testing: false,
 };
 
@@ -54,9 +57,16 @@ const getDefaultDbState = (role: SourceOrTarget): DBState => {
         ? process.env.NEXT_PUBLIC_TEST_SOURCE_URL || ''
         : process.env.NEXT_PUBLIC_TEST_TARGET_URL || '',
     testMessage: '',
+    testStatus: 'idle',
     testing: false,
   };
 };
+
+const toDbConfig = ({ username, password, url }: DBState): DBConfig => ({
+  username,
+  password,
+  url,
+});
 
 const parseList = (value: string | undefined): string[] =>
   (value || '')
@@ -132,6 +142,7 @@ export default function HomePage() {
       ...prev,
       [field]: value,
       testMessage: '',
+      testStatus: 'idle',
     }));
   };
 
@@ -184,27 +195,25 @@ export default function HomePage() {
   const onTestConnection = async (role: SourceOrTarget) => {
     const current = role === 'source' ? source : target;
     const setter = role === 'source' ? setSource : setTarget;
+    const roleLabel = role === 'source' ? 'Source DB' : 'Target DB';
     if (!current.url.trim()) {
-      setter((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.' }));
+      setter((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.', testStatus: 'error' }));
       return;
     }
 
-    setter((prev) => ({ ...prev, testing: true, testMessage: '' }));
+    setter((prev) => ({ ...prev, testing: true, testMessage: '', testStatus: 'idle' }));
     try {
-      const res = await testConnection({
-        username: current.username,
-        password: current.password,
-        url: current.url,
-      });
+      const res = await testConnection(toDbConfig(current));
       const err = toErrorMessage(res);
       setter((prev) => ({
         ...prev,
+        testStatus: err ? 'error' : 'success',
         testMessage: err || `성공: ${res.data?.db_name || '연결 테스트 완료'}`,
       }));
-      setMessage(err || '연결 테스트 완료');
+      setMessage(err || `${roleLabel} 연결 테스트 완료`);
     } catch {
-      setter((prev) => ({ ...prev, testMessage: '연결 테스트 실패' }));
-      setMessage('연결 테스트 실패');
+      setter((prev) => ({ ...prev, testMessage: '연결 테스트 실패', testStatus: 'error' }));
+      setMessage(`${roleLabel} 연결 테스트 실패`);
     } finally {
       setter((prev) => ({ ...prev, testing: false }));
     }
@@ -219,7 +228,7 @@ export default function HomePage() {
 
     setMappingBusy(mappingId, isSource ? { sourceTables: true } : { targetTables: true });
     try {
-      const res = await fetchTables(db, schema || '');
+      const res = await fetchTables(toDbConfig(db), schema || '');
       if (!res.success || !res.data) {
         setMessage(toErrorMessage(res) || '테이블 조회 실패');
         return;
@@ -245,8 +254,8 @@ export default function HomePage() {
 
     setMappingBusy(mappingId, { columns: true });
     const [src, tgt] = await Promise.all([
-      fetchColumns(source, row.source_schema || '', row.source_table),
-      fetchColumns(target, row.target_schema || '', row.target_table),
+      fetchColumns(toDbConfig(source), row.source_schema || '', row.source_table),
+      fetchColumns(toDbConfig(target), row.target_schema || '', row.target_table),
     ]);
     try {
       if (!src.success || !src.data || !tgt.success || !tgt.data) {
@@ -519,6 +528,8 @@ export default function HomePage() {
           username={source.username}
           password={source.password}
           url={source.url}
+          testMessage={source.testMessage}
+          testStatus={source.testStatus}
           onFieldChange={updateDb}
           onTest={onTestConnection}
           disabled={uiBusy}
@@ -529,18 +540,14 @@ export default function HomePage() {
           username={target.username}
           password={target.password}
           url={target.url}
+          testMessage={target.testMessage}
+          testStatus={target.testStatus}
           onFieldChange={updateDb}
           onTest={onTestConnection}
           disabled={uiBusy}
           testInFlight={target.testing}
         />
       </section>
-
-      {(source.testMessage || target.testMessage) && (
-        <section className="card section">
-          <p className="helper">{source.testMessage || target.testMessage}</p>
-        </section>
-      )}
 
       <div className="flex-gap" style={{ justifyContent: 'space-between', marginBottom: '0.6rem' }}>
         <h2 className="section-title">테이블 매핑 설정</h2>
@@ -596,11 +603,11 @@ export default function HomePage() {
           {JSON.stringify(
             {
               source_db: {
-                ...source,
+                ...toDbConfig(source),
                 password: '***',
               },
               target_db: {
-                ...target,
+                ...toDbConfig(target),
                 password: '***',
               },
               table_configs: mappings.map((row) => coerceJobConfig(row)),
