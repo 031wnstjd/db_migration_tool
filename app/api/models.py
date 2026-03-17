@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -73,9 +73,17 @@ class JobStartRequest(BaseModel):
     dry_run: bool = True
 
 
+class IssueDetail(BaseModel):
+    code: str
+    message: str
+    target: str | None = None
+    details: dict[str, Any] | None = None
+
+
 class ApiResponse(BaseModel):
     success: bool
     message: str
     data: dict | list | None = None
-    errors: list[str] = Field(default_factory=list)
+    errors: list[IssueDetail] = Field(default_factory=list)
+    warnings: list[IssueDetail] = Field(default_factory=list)
     logs: list[str] = Field(default_factory=list)

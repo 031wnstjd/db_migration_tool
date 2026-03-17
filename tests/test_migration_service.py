@@ -148,8 +148,11 @@ def test_preview_sql_variants() -> None:
 
     assert insert_preview['source_select'] == 'SELECT main.a.id, main.a.name \nFROM main.a'
     assert 'INSERT INTO main.b (id, name) VALUES (?, ?)' in insert_preview['dml_preview']
+    assert insert_preview['preview_mode'] == 'compiled_sql'
+    assert insert_preview['preview_notes'] == []
     assert 'UPDATE main.b SET name=?, age=? WHERE main.b.id = ?' in merge_preview['dml_preview']
-    assert '-- if update affected 0 rows, run INSERT fallback' in merge_preview['dml_preview']
+    assert merge_preview['preview_mode'] == 'compiled_sql_with_notes'
+    assert any('UPDATE then INSERT fallback' in note for note in merge_preview['preview_notes'])
     assert 'DELETE FROM main.b WHERE main.b.id = ?' in delete_preview['dml_preview']
 
 
@@ -178,7 +181,8 @@ def test_preview_sql_compiles_for_mysql_and_oracle() -> None:
     assert ' LIMIT %s' in mysql_preview['source_select']
     assert 'FETCH FIRST' in oracle_preview['source_select']
     assert 'SET name=:name, created_at=:created_at' in oracle_preview['dml_preview']
-    assert 'run INSERT fallback' in oracle_preview['dml_preview']
+    assert oracle_preview['preview_mode'] == 'compiled_sql_with_notes'
+    assert any('UPDATE then INSERT fallback' in note for note in oracle_preview['preview_notes'])
 
 
 def test_start_job_and_dry_run_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

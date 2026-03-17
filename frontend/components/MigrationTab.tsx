@@ -15,8 +15,6 @@ type BusyFlags = {
 };
 
 type DbPanelState = {
-  username: string;
-  password: string;
   url: string;
   testMessage: string;
   testStatus: TestStatus;
@@ -26,7 +24,7 @@ type DbPanelState = {
 type Props = {
   source: DbPanelState;
   target: DbPanelState;
-  onDbFieldChange: (role: Role, field: 'username' | 'password' | 'url', value: string) => void;
+  onDbFieldChange: (role: Role, field: 'url', value: string) => void;
   onTestConnection: (role: Role) => void;
   uiBusy: boolean;
   mappings: MappingCardPayload[];
@@ -94,15 +92,13 @@ export default function MigrationTab({
             <p className="section-kicker">Tab 1</p>
             <h2 className="section-title">DB Table Migration</h2>
           </div>
-          <p className="helper">Source / Target DB 매핑과 실행 제어를 한 화면에서 관리합니다.</p>
+          <p className="helper">Source / Target Database URL(DSN) 기반 매핑과 실행 제어를 한 화면에서 관리합니다.</p>
         </div>
       </section>
 
       <section className="grid-2 section">
         <ConnectionPanel
           role="source"
-          username={source.username}
-          password={source.password}
           url={source.url}
           testMessage={source.testMessage}
           testStatus={source.testStatus}
@@ -113,8 +109,6 @@ export default function MigrationTab({
         />
         <ConnectionPanel
           role="target"
-          username={target.username}
-          password={target.password}
           url={target.url}
           testMessage={target.testMessage}
           testStatus={target.testStatus}

@@ -1,8 +1,16 @@
 export type DBConfig = {
-  username: string;
-  password: string;
   url: string;
+  username?: string | null;
+  password?: string | null;
 };
+
+export type KnownApiErrorCode =
+  | 'DRIVER_MISSING'
+  | 'PERMISSION_DENIED'
+  | 'BACKEND_CAPABILITY_MISMATCH'
+  | 'VALIDATION_ERROR';
+
+export type ApiErrorCode = KnownApiErrorCode | (string & {});
 
 export type ColumnMaskMode = 'NONE' | 'NULL' | 'FIXED' | 'HASH' | 'PARTIAL';
 
@@ -48,6 +56,7 @@ export type DdlExtractResult = {
   constraint_sql: string;
   partition_sql: string;
   warnings: string[];
+  warning_codes: string[];
 };
 
 export type DdlExtractRequest = DBConfig & {
@@ -65,14 +74,31 @@ export type DdlExtractResponse = {
   partition_sql: string;
   combined_sql: string;
   warnings: string[];
+  warning_codes: string[];
+};
+
+export type ConnectionTestResponse = {
+  db_name: string;
+  dialect?: string | null;
+  driver?: string | null;
+  server_time: string;
+};
+
+export type ApiIssue = {
+  code: ApiErrorCode;
+  message: string;
+  target?: string | null;
+  details?: Record<string, unknown> | null;
 };
 
 export type ApiResponse<T = unknown> = {
   success: boolean;
   message: string;
   data: T | null;
-  errors: string[];
+  errors: ApiIssue[];
+  warnings?: ApiIssue[];
   logs: string[];
+  status_code?: number;
 };
 
 export type JobRecord = {

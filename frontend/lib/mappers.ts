@@ -42,7 +42,7 @@ export function coerceJobConfig(config: Partial<TableMigrationConfig>): TableMig
   };
 }
 
-export function buildPayload(source: { username: string; password: string; url: string }, target: { username: string; password: string; url: string }, mappings: TableMigrationConfig[], dryRun: boolean): JobStartRequest {
+export function buildPayload(source: { url: string }, target: { url: string }, mappings: TableMigrationConfig[], dryRun: boolean): JobStartRequest {
   return {
     source_db: source,
     target_db: target,

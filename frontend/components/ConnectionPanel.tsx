@@ -7,12 +7,10 @@ type TestStatus = 'idle' | 'success' | 'error';
 
 type Props = {
   role: Role;
-  username: string;
-  password: string;
   url: string;
   testMessage: string;
   testStatus: TestStatus;
-  onFieldChange: (role: Role, field: 'username' | 'password' | 'url', value: string) => void;
+  onFieldChange: (role: Role, field: 'url', value: string) => void;
   onTest: (role: Role) => void;
   disabled?: boolean;
   testInFlight?: boolean;
@@ -30,8 +28,6 @@ const statusIcon: Record<Exclude<TestStatus, 'idle'>, string> = {
 
 export default function ConnectionPanel({
   role,
-  username,
-  password,
   url,
   testMessage,
   testStatus,
@@ -40,47 +36,24 @@ export default function ConnectionPanel({
   disabled,
   testInFlight,
 }: Props) {
-  const onInput = (field: 'username' | 'password' | 'url') => (e: ChangeEvent<HTMLInputElement>) => {
-    onFieldChange(role, field, e.target.value);
-  };
+  const onInput = (e: ChangeEvent<HTMLInputElement>) => onFieldChange(role, 'url', e.target.value);
 
   return (
     <section className="card panel">
       <h3 className="card-title">{title[role]}</h3>
+      <p className="helper">일반 연결은 Database URL(DSN) 한 칸만 사용합니다. 인증 정보가 필요하면 URL 안에 포함해 주세요.</p>
       <label>
-        <span className="label">Username</span>
-        <input
-          className="input"
-          value={username}
-          onChange={onInput('username')}
-          disabled={disabled}
-          autoComplete="off"
-          placeholder="선택 사항"
-        />
-      </label>
-      <label>
-        <span className="label">Password</span>
-        <input
-          className="input"
-          type="password"
-          value={password}
-          onChange={onInput('password')}
-          disabled={disabled}
-          autoComplete="new-password"
-          placeholder="선택 사항"
-        />
-      </label>
-      <label>
-        <span className="label">Database URL</span>
+        <span className="label">Database URL / DSN</span>
         <input
           className="input"
           value={url}
-          placeholder="mysql+pymysql://... / oracle+oracledb://... / postgresql+psycopg://... / sqlite:///..."
-          onChange={onInput('url')}
+          placeholder="postgresql+psycopg://scott:tiger@localhost:5432/app / oracle+oracledb://scott:tiger@dbhost:1521/?service_name=FREEPDB1 / sqlite:////tmp/demo.db"
+          onChange={onInput}
           disabled={disabled}
           autoComplete="off"
         />
       </label>
+      <p className="helper">예시: PostgreSQL / Oracle / SQLite</p>
       <div className="flex-gap">
         <button className="btn primary" type="button" onClick={() => onTest(role)} disabled={disabled || testInFlight}>
           {testInFlight ? '테스트 중…' : `${title[role]} DB 연결 테스트`}

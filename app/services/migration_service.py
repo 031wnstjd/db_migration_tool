@@ -86,7 +86,7 @@ def _preview_table(schema: str | None, table_name: str, columns: list[str]) -> T
     return Table(table_name, metadata, *[Column(column_name, String()) for column_name in unique_columns], schema=(schema or '').strip() or None)
 
 
-def _preview_sql(cfg: TableMigrationConfig, source_url: str | None = None, target_url: str | None = None) -> dict[str, str]:
+def _preview_sql(cfg: TableMigrationConfig, source_url: str | None = None, target_url: str | None = None) -> dict[str, Any]:
     selected = cfg.selected_columns
     source_columns = selected + ([cfg.date_filter_column] if cfg.date_filter_column else [])
     target_columns = list(dict.fromkeys(selected + cfg.key_columns))
@@ -103,6 +103,8 @@ def _preview_sql(cfg: TableMigrationConfig, source_url: str | None = None, targe
 
     source_select = str(source_stmt.compile(dialect=_preview_dialect(source_url)))
     insert_stmt = insert(target_table).values({column_name: bindparam(column_name) for column_name in selected})
+    preview_mode = 'compiled_sql'
+    preview_notes: list[str] = []
 
     if cfg.strategy == 'INSERT':
         dml = str(insert_stmt.compile(dialect=_preview_dialect(target_url)))
@@ -119,15 +121,21 @@ def _preview_sql(cfg: TableMigrationConfig, source_url: str | None = None, targe
         update_stmt = update(target_table).where(and_(*[target_table.c[key] == bindparam(key) for key in cfg.key_columns])).values(
             **update_values
         )
+        preview_mode = 'compiled_sql_with_notes'
+        preview_notes.append('MERGE preview uses UPDATE then INSERT fallback semantics when the UPDATE affects 0 rows.')
         dml = '\n'.join(
             [
                 str(update_stmt.compile(dialect=_preview_dialect(target_url))),
-                '-- if update affected 0 rows, run INSERT fallback',
                 str(insert_stmt.compile(dialect=_preview_dialect(target_url))),
             ]
         )
 
-    return {'source_select': source_select.strip(), 'dml_preview': dml.strip()}
+    return {
+        'source_select': source_select.strip(),
+        'dml_preview': dml.strip(),
+        'preview_mode': preview_mode,
+        'preview_notes': preview_notes,
+    }
 
 
 def _parse_date(value: str) -> date:

@@ -17,3 +17,8 @@ dependencies = [
 
 [tool.uv]
 dev-dependencies = []
+
+[tool.pytest.ini_options]
+markers = [
+  "oracle_live: requires ORACLE_TEST_* environment variables and a reachable Oracle instance",
+]

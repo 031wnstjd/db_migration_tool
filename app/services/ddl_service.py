@@ -28,6 +28,22 @@ def _mysql_qualified(schema: str | None, table_name: str) -> str:
     return ".".join(f"`{part.replace('`', '``')}`" for part in parts)
 
 
+def _warn(warnings: list[str], warning_codes: list[str], code: str, message: str) -> None:
+    warning_codes.append(code)
+    warnings.append(message)
+
+
+def _is_missing_oracle_dependent_ddl(exc: Exception, ddl_type: str) -> bool:
+    detail = str(exc).upper()
+    normalized_type = ddl_type.upper()
+    return (
+        'ORA-31608' in detail
+        and ('TYPE ' + normalized_type) in detail
+        and f"GET_DEPENDENT_DDL('{normalized_type}'" in detail
+        and 'NOT FOUND' in detail
+    )
+
+
 class DdlService:
     def extract_table_ddl(
         self,
@@ -72,6 +88,7 @@ class DdlService:
 
     def _extract_generic(self, conn: Connection, schema: str | None, table_name: str) -> dict[str, Any]:
         warnings: list[str] = []
+        warning_codes: list[str] = []
         table, table_sql = self._table_sql_from_reflection(conn, schema, table_name)
         index_sql = self._compile_indexes(table, conn.dialect)
         return {
@@ -80,10 +97,12 @@ class DdlService:
             "constraint_sql": "",
             "partition_sql": "",
             "warnings": warnings,
+            "warning_codes": warning_codes,
         }
 
     def _extract_sqlite(self, conn: Connection, table_name: str) -> dict[str, Any]:
         warnings: list[str] = []
+        warning_codes: list[str] = []
         row = conn.execute(
             text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = :table_name"),
             {"table_name": table_name},
@@ -111,10 +130,12 @@ class DdlService:
             "constraint_sql": "",
             "partition_sql": "",
             "warnings": warnings + ["Partition metadata is not applicable for SQLite."],
+            "warning_codes": warning_codes + ["PARTITION_NOT_APPLICABLE"],
         }
 
     def _extract_mysql(self, conn: Connection, schema: str | None, table_name: str) -> dict[str, Any]:
         warnings: list[str] = []
+        warning_codes: list[str] = []
         qualified = _mysql_qualified(schema, table_name)
         try:
             create_row = conn.exec_driver_sql(f"SHOW CREATE TABLE {qualified}").first()
@@ -129,17 +150,19 @@ class DdlService:
         index_sql = self._compile_indexes(table, conn.dialect)
         partition_sql = "\n".join(line for line in create_sql.splitlines() if "PARTITION" in line.upper())
         if not partition_sql:
-            warnings.append("No MySQL partition clause detected for this table.")
+            _warn(warnings, warning_codes, "PARTITION_NOT_FOUND", "No MySQL partition clause detected for this table.")
         return {
             "table_sql": create_sql,
             "index_sql": index_sql,
             "constraint_sql": "",
             "partition_sql": _normalize_sql(partition_sql),
             "warnings": warnings,
+            "warning_codes": warning_codes,
         }
 
     def _extract_postgresql(self, conn: Connection, schema: str | None, table_name: str) -> dict[str, Any]:
         warnings: list[str] = []
+        warning_codes: list[str] = []
         normalized_schema = (schema or "").strip() or "public"
         table, table_sql = self._table_sql_from_reflection(conn, normalized_schema, table_name)
 
@@ -212,7 +235,7 @@ class DdlService:
 
         partition_sql = "\n".join(line for line in partition_lines if line)
         if not partition_sql:
-            warnings.append("No PostgreSQL partition definition detected for this table.")
+            _warn(warnings, warning_codes, "PARTITION_NOT_FOUND", "No PostgreSQL partition definition detected for this table.")
 
         return {
             "table_sql": table_sql,
@@ -220,10 +243,12 @@ class DdlService:
             "constraint_sql": constraint_sql,
             "partition_sql": _normalize_sql(partition_sql),
             "warnings": warnings,
+            "warning_codes": warning_codes,
         }
 
     def _extract_oracle(self, conn: Connection, schema: str | None, table_name: str) -> dict[str, Any]:
         warnings: list[str] = []
+        warning_codes: list[str] = []
         owner = ((schema or "").strip() or conn.execute(text("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM dual")).scalar_one()).upper()
         table_name_upper = table_name.upper()
 
@@ -249,7 +274,7 @@ class DdlService:
             )
         except Exception as exc:
             index_sql = ""
-            warnings.append(f"Oracle index DDL unavailable: {exc}")
+            _warn(warnings, warning_codes, "INDEX_DDL_UNAVAILABLE", f"Oracle index DDL unavailable: {exc}")
 
         constraint_chunks: list[str] = []
         for ddl_type in ("CONSTRAINT", "REF_CONSTRAINT"):
@@ -261,11 +286,13 @@ class DdlService:
                 if chunk:
                     constraint_chunks.append(chunk)
             except Exception as exc:
-                warnings.append(f"Oracle {ddl_type} DDL unavailable: {exc}")
+                if _is_missing_oracle_dependent_ddl(exc, ddl_type):
+                    continue
+                _warn(warnings, warning_codes, f"{ddl_type}_DDL_UNAVAILABLE", f"Oracle {ddl_type} DDL unavailable: {exc}")
 
         partition_sql = table_sql if "PARTITION" in table_sql.upper() else ""
         if not partition_sql:
-            warnings.append("No Oracle partition clause detected in table DDL.")
+            _warn(warnings, warning_codes, "PARTITION_NOT_FOUND", "No Oracle partition clause detected in table DDL.")
 
         return {
             "table_sql": table_sql,
@@ -273,6 +300,7 @@ class DdlService:
             "constraint_sql": "\n\n".join(chunk for chunk in constraint_chunks if chunk),
             "partition_sql": partition_sql,
             "warnings": warnings,
+            "warning_codes": warning_codes,
         }
 
     @staticmethod

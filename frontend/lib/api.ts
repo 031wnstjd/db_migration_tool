@@ -1,6 +1,8 @@
 import {
+  ApiIssue,
   ApiResponse,
   ColumnMetadata,
+  ConnectionTestResponse,
   DBConfig,
   DdlExtractRequest,
   DdlExtractResponse,
@@ -29,6 +31,28 @@ function toErrorMessage(err: unknown): string {
   return '요청 중 오류가 발생했습니다.';
 }
 
+function normalizeIssues(issues: unknown, fallbackMessage: string): ApiIssue[] {
+  if (!Array.isArray(issues) || issues.length === 0) {
+    if (!fallbackMessage) {
+      return [];
+    }
+    return [{ code: 'VALIDATION_ERROR', message: fallbackMessage }];
+  }
+
+  return issues.map((issue) => {
+    if (issue && typeof issue === 'object' && 'message' in issue) {
+      const typed = issue as ApiIssue;
+      return {
+        code: typed.code || 'VALIDATION_ERROR',
+        message: typed.message || fallbackMessage,
+        target: typed.target,
+        details: typed.details,
+      };
+    }
+    return { code: 'VALIDATION_ERROR', message: String(issue || fallbackMessage) };
+  });
+}
+
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
   let res: Response;
   try {
@@ -44,7 +68,7 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<A
       success: false,
       message: 'Network request failed',
       data: null,
-      errors: [toErrorMessage(err)],
+      errors: [{ code: 'VALIDATION_ERROR', message: toErrorMessage(err) }],
       logs: [],
     };
   }
@@ -55,8 +79,10 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<A
       success: false,
       message: payload?.message || `HTTP ${res.status}`,
       data: payload?.data ?? null,
-      errors: payload?.errors?.length ? payload.errors : [toErrorMessage(`HTTP ${res.status}`)],
+      errors: normalizeIssues(payload?.errors, toErrorMessage(`HTTP ${res.status}`)),
+      warnings: normalizeIssues(payload?.warnings, ''),
       logs: payload?.logs || [],
+      status_code: res.status,
     };
   }
 
@@ -64,12 +90,14 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<A
     success: Boolean(payload.success),
     message: payload.message,
     data: payload.data ?? null,
-    errors: payload.errors || [],
+    errors: normalizeIssues(payload.errors, ''),
+    warnings: normalizeIssues(payload.warnings, ''),
     logs: payload.logs || [],
+    status_code: res.status,
   };
 }
 
-export async function testConnection(db: DBConfig): Promise<ApiResponse<{ db_name: string; server_time: string }>> {
+export async function testConnection(db: DBConfig): Promise<ApiResponse<ConnectionTestResponse>> {
   return apiRequest('/connections/test', {
     method: 'POST',
     body: JSON.stringify(db),

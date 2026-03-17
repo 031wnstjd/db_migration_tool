@@ -17,7 +17,7 @@ import {
 import MigrationTab from '../components/MigrationTab';
 import DdlExtractPanel from '../components/DdlExtractPanel';
 import { coerceJobConfig, intersectColumns } from '../lib/mappers';
-import { ApiResponse, DBConfig, DdlExtractResponse, JobRecord } from '../lib/types';
+import { ApiResponse, DBConfig, DdlExtractResponse, JobRecord, KnownApiErrorCode } from '../lib/types';
 import { MappingCardPayload } from '../components/TableMappingCard';
 
 type SourceOrTarget = 'source' | 'target';
@@ -43,8 +43,6 @@ type DdlState = DBConfig & {
 };
 
 const BASE_STATE: DBState = {
-  username: '',
-  password: '',
   url: '',
   testMessage: '',
   testStatus: 'idle',
@@ -52,8 +50,6 @@ const BASE_STATE: DBState = {
 };
 
 const BASE_DDL_STATE: DdlState = {
-  username: '',
-  password: '',
   url: '',
   schema: '',
   tableName: '',
@@ -66,6 +62,26 @@ const BASE_DDL_STATE: DdlState = {
   result: null,
 };
 
+const getDefaultDdlState = (): DdlState => {
+  const presetEnabled = process.env.NEXT_PUBLIC_TEST_PRESET_ENABLED === 'true';
+  if (!presetEnabled) {
+    return BASE_DDL_STATE;
+  }
+
+  return {
+    url: process.env.NEXT_PUBLIC_TEST_DDL_URL || process.env.NEXT_PUBLIC_TEST_SOURCE_URL || '',
+    schema: process.env.NEXT_PUBLIC_TEST_DDL_SCHEMA || process.env.NEXT_PUBLIC_TEST_SOURCE_SCHEMA || '',
+    tableName: process.env.NEXT_PUBLIC_TEST_DDL_TABLE || process.env.NEXT_PUBLIC_TEST_SOURCE_TABLE || '',
+    testMessage: '',
+    testStatus: 'idle',
+    testing: false,
+    loadingTables: false,
+    extracting: false,
+    tables: [],
+    result: null,
+  };
+};
+
 const getDefaultDbState = (role: SourceOrTarget): DBState => {
   const presetEnabled = process.env.NEXT_PUBLIC_TEST_PRESET_ENABLED === 'true';
   if (!presetEnabled) {
@@ -73,14 +89,6 @@ const getDefaultDbState = (role: SourceOrTarget): DBState => {
   }
 
   return {
-    username:
-      role === 'source'
-        ? process.env.NEXT_PUBLIC_TEST_SOURCE_USER || ''
-        : process.env.NEXT_PUBLIC_TEST_TARGET_USER || '',
-    password:
-      role === 'source'
-        ? process.env.NEXT_PUBLIC_TEST_SOURCE_PASSWORD || ''
-        : process.env.NEXT_PUBLIC_TEST_TARGET_PASSWORD || '',
     url:
       role === 'source'
         ? process.env.NEXT_PUBLIC_TEST_SOURCE_URL || ''
@@ -91,11 +99,9 @@ const getDefaultDbState = (role: SourceOrTarget): DBState => {
   };
 };
 
-const toDbConfig = ({ username, password, url }: DBState | DdlState): DBConfig => ({
-  username,
-  password,
-  url,
-});
+const toDbConfig = ({ url }: DBState | DdlState): DBConfig => ({ url: url.trim() });
+
+const maskDbUrl = (url: string) => url.replace(/(\/\/[^/:?#]+:)([^@/]+)(@)/, '$1***$3');
 
 const parseList = (value: string | undefined): string[] =>
   (value || '')
@@ -133,15 +139,40 @@ type MappingLoadState = {
   columns: boolean;
 };
 
-const toErrorMessage = (resp: ApiResponse<unknown>) =>
-  !resp.success && (resp.errors?.join('\n') || resp.message || '요청이 실패했습니다.');
+const ERROR_CODE_MESSAGES: Record<KnownApiErrorCode, string> = {
+  DRIVER_MISSING: 'DB 드라이버가 설치되지 않았습니다. 백엔드 Python 의존성과 드라이버 설정을 확인해 주세요.',
+  PERMISSION_DENIED: 'DB 권한이 부족합니다. 계정 권한과 접근 가능한 스키마/오브젝트를 확인해 주세요.',
+  BACKEND_CAPABILITY_MISMATCH: '현재 백엔드 기능 또는 버전이 요청한 작업을 지원하지 않습니다.',
+  VALIDATION_ERROR: '입력값 또는 요청 형식이 올바르지 않습니다.',
+};
+
+const toErrorMessage = (resp: ApiResponse<unknown>) => {
+  if (resp.success) {
+    return '';
+  }
+  const first = resp.errors?.[0];
+  if (!first) {
+    return resp.message || '요청이 실패했습니다.';
+  }
+  const mapped = first.code && first.code in ERROR_CODE_MESSAGES ? ERROR_CODE_MESSAGES[first.code as KnownApiErrorCode] : '';
+  if (mapped && first.message && first.message !== resp.message) {
+    return `${mapped}\n${first.message}`;
+  }
+  return mapped || first.message || resp.message || '요청이 실패했습니다.';
+};
+
+const toConnectionSuccessMessage = (dbName?: string | null, dialect?: string | null, driver?: string | null) => {
+  const label = dbName || '연결 테스트 완료';
+  const dialectLabel = [dialect, driver].filter(Boolean).join(' / ');
+  return dialectLabel ? `성공: ${label} (${dialectLabel})` : `성공: ${label}`;
+};
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<AppTab>('migration');
   const [apiBase] = useState(() => process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api');
   const [source, setSource] = useState<DBState>(getDefaultDbState('source'));
   const [target, setTarget] = useState<DBState>(getDefaultDbState('target'));
-  const [ddl, setDdl] = useState<DdlState>(BASE_DDL_STATE);
+  const [ddl, setDdl] = useState<DdlState>(getDefaultDdlState);
   const [mappings, setMappings] = useState<MappingCardPayload[]>([newMapping()]);
   const [running, setRunning] = useState(false);
   const [canceling, setCanceling] = useState(false);
@@ -168,7 +199,7 @@ export default function HomePage() {
     };
   }, []);
 
-  const updateDb = (role: SourceOrTarget, field: keyof DBConfig, value: string) => {
+  const updateDb = (role: SourceOrTarget, field: 'url', value: string) => {
     const setter = role === 'source' ? setSource : setTarget;
     setter((prev) => ({
       ...prev,
@@ -178,7 +209,7 @@ export default function HomePage() {
     }));
   };
 
-  const updateDdl = (field: 'username' | 'password' | 'url' | 'schema' | 'tableName', value: string) => {
+  const updateDdl = (field: 'url' | 'schema' | 'tableName', value: string) => {
     setDdl((prev) => ({
       ...prev,
       [field]: value,
@@ -247,7 +278,7 @@ export default function HomePage() {
     const setter = role === 'source' ? setSource : setTarget;
     const roleLabel = role === 'source' ? 'Source DB' : 'Target DB';
     if (!current.url.trim()) {
-      setter((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.', testStatus: 'error' }));
+      setter((prev) => ({ ...prev, testMessage: 'Database URL(DSN)을 입력해 주세요.', testStatus: 'error' }));
       return;
     }
 
@@ -258,7 +289,7 @@ export default function HomePage() {
       setter((prev) => ({
         ...prev,
         testStatus: err ? 'error' : 'success',
-        testMessage: err || `성공: ${res.data?.db_name || '연결 테스트 완료'}`,
+        testMessage: err || toConnectionSuccessMessage(res.data?.db_name, res.data?.dialect, res.data?.driver),
       }));
       setMigrationMessage(`${roleLabel}: ${err || '연결 테스트 완료'}`);
     } catch {
@@ -271,7 +302,7 @@ export default function HomePage() {
 
   const onTestDdlConnection = async () => {
     if (!ddl.url.trim()) {
-      setDdl((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.', testStatus: 'error' }));
+      setDdl((prev) => ({ ...prev, testMessage: 'Database URL(DSN)을 입력해 주세요.', testStatus: 'error' }));
       return;
     }
 
@@ -282,7 +313,7 @@ export default function HomePage() {
       setDdl((prev) => ({
         ...prev,
         testStatus: err ? 'error' : 'success',
-        testMessage: err || `성공: ${res.data?.db_name || '연결 테스트 완료'}`,
+        testMessage: err || toConnectionSuccessMessage(res.data?.db_name, res.data?.dialect, res.data?.driver),
       }));
       setDdlMessage(`DDL 대상 DB: ${err || '연결 테스트 완료'}`);
     } catch {
@@ -376,7 +407,7 @@ export default function HomePage() {
 
   const loadDdlTables = async () => {
     if (!ddl.url.trim()) {
-      setDdl((prev) => ({ ...prev, testMessage: 'Database URL을 입력해 주세요.', testStatus: 'error' }));
+      setDdl((prev) => ({ ...prev, testMessage: 'Database URL(DSN)을 입력해 주세요.', testStatus: 'error' }));
       return;
     }
 
@@ -400,7 +431,7 @@ export default function HomePage() {
 
   const extractDdl = async () => {
     if (!ddl.url.trim()) {
-      setDdlMessage('DDL 추출용 Database URL을 입력해 주세요.');
+      setDdlMessage('DDL 추출용 Database URL(DSN)을 입력해 주세요.');
       return;
     }
     if (!ddl.tableName.trim()) {
@@ -417,7 +448,7 @@ export default function HomePage() {
       });
       if (!res.success || !res.data) {
         const errorMessage = toErrorMessage(res) || 'DDL 추출 실패';
-        if (errorMessage.includes('HTTP 404')) {
+        if (res.status_code === 404) {
           const backendInfo = await inspectBackendDdlSupport();
           if (backendInfo && !backendInfo.hasDdlRoute) {
             setDdlMessage(
@@ -444,7 +475,7 @@ export default function HomePage() {
     const missing = mappings.find((m) => !m.source_table.trim() || !m.target_table.trim() || m.selected_columns.length === 0);
 
     if (!source.url.trim() || !target.url.trim()) {
-      setMigrationMessage('Source/Target Database URL을 입력해 주세요.');
+      setMigrationMessage('Source/Target Database URL(DSN)을 입력해 주세요.');
       return null;
     }
 
@@ -590,7 +621,7 @@ export default function HomePage() {
       try {
         const res = await getJob(pollingJobId);
         if (!res.success || !res.data) {
-          throw new Error(res.errors?.join(', ') || 'Job 조회 실패');
+          throw new Error(toErrorMessage(res) || 'Job 조회 실패');
         }
         setJob(res.data);
         if (['RUNNING', 'PENDING', 'CANCEL_REQUESTED'].includes(res.data.status)) {
@@ -626,11 +657,11 @@ export default function HomePage() {
   const requestPreview = {
     source_db: {
       ...toDbConfig(source),
-      password: '***',
+      url: maskDbUrl(source.url.trim()),
     },
     target_db: {
       ...toDbConfig(target),
-      password: '***',
+      url: maskDbUrl(target.url.trim()),
     },
     table_configs: mappings.map((row) => coerceJobConfig(row)),
     dry_run: true,

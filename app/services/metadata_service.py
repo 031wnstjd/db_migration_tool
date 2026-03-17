@@ -13,10 +13,11 @@ class MetadataService:
         engine = create_db_engine(url, username=username, password=password)
         try:
             with engine.connect() as conn:
-                conn.execute(text('SELECT 1'))
+                conn.execute(text(self._probe_sql(engine.dialect.name)))
             return {
                 'db_name': engine.url.database or engine.dialect.name,
                 'dialect': engine.dialect.name,
+                'driver': engine.dialect.driver,
                 'server_time': datetime.now(timezone.utc).isoformat(),
             }
         finally:
@@ -97,3 +98,9 @@ class MetadataService:
     def _schema_arg(schema: str | None) -> str | None:
         normalized = (schema or '').strip()
         return normalized or None
+
+    @staticmethod
+    def _probe_sql(dialect: str) -> str:
+        if dialect == 'oracle':
+            return 'SELECT 1 FROM dual'
+        return 'SELECT 1'

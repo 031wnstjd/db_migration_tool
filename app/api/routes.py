@@ -4,7 +4,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.models import ApiResponse, ColumnsRequest, ConnectionTestRequest, DdlExtractRequest, JobStartRequest, TablesRequest
+from app.api.models import ApiResponse, ColumnsRequest, ConnectionTestRequest, DdlExtractRequest, IssueDetail, JobStartRequest, TablesRequest
+from app.core.errors import classify_error
 from app.services.ddl_service import DdlService
 from app.services import repository
 from app.services.metadata_service import MetadataService
@@ -15,6 +16,16 @@ logger = logging.getLogger(__name__)
 metadata_service = MetadataService()
 migration_service = MigrationService()
 ddl_service = DdlService()
+
+
+def _error_response(message: str, exc: Exception, *, log_message: str | None = None) -> ApiResponse:
+    info = classify_error(exc)
+    return ApiResponse(
+        success=False,
+        message=message,
+        errors=[IssueDetail(code=info.code, message=info.detail)],
+        logs=[log_message] if log_message else [],
+    )
 
 
 @router.get('/health', response_model=ApiResponse)
@@ -29,7 +40,7 @@ def test_connection(request: ConnectionTestRequest) -> ApiResponse:
         return ApiResponse(success=True, message='Connection successful', data=data, logs=[f"Connected via {data['dialect']}"])
     except Exception as exc:
         logger.exception('Connection test failed')
-        return ApiResponse(success=False, message='Connection failed', errors=[str(exc)], logs=['Check database url and credentials'])
+        return _error_response('Connection failed', exc, log_message='Check database url and credentials')
 
 
 @router.post('/metadata/tables', response_model=ApiResponse)
@@ -39,7 +50,7 @@ def get_tables(request: TablesRequest) -> ApiResponse:
         return ApiResponse(success=True, message='Tables loaded', data={'tables': tables})
     except Exception as exc:
         logger.exception('Load tables failed')
-        return ApiResponse(success=False, message='Failed to load tables', errors=[str(exc)])
+        return _error_response('Failed to load tables', exc)
 
 
 @router.post('/metadata/columns', response_model=ApiResponse)
@@ -55,7 +66,7 @@ def get_columns(request: ColumnsRequest) -> ApiResponse:
         )
     except Exception as exc:
         logger.exception('Load columns failed')
-        return ApiResponse(success=False, message='Failed to load columns', errors=[str(exc)])
+        return _error_response('Failed to load columns', exc)
 
 
 @router.post('/metadata/ddl', response_model=ApiResponse)
@@ -66,7 +77,7 @@ def extract_ddl(request: DdlExtractRequest) -> ApiResponse:
         return ApiResponse(success=True, message='DDL extracted', data=ddl)
     except Exception as exc:
         logger.exception('DDL extraction failed')
-        return ApiResponse(success=False, message='Failed to extract DDL', errors=[str(exc)])
+        return _error_response('Failed to extract DDL', exc)
 
 
 @router.post('/jobs/start', response_model=ApiResponse)
@@ -77,7 +88,7 @@ def start_job(request: JobStartRequest) -> ApiResponse:
         return ApiResponse(success=True, message=f'{mode} job started', data={'job_id': job_id})
     except Exception as exc:
         logger.exception('Start job failed')
-        return ApiResponse(success=False, message='Failed to start job', errors=[str(exc)])
+        return _error_response('Failed to start job', exc)
 
 
 @router.get('/jobs/{job_id}', response_model=ApiResponse)
@@ -101,9 +112,9 @@ def cancel_job(job_id: str) -> ApiResponse:
             return ApiResponse(
                 success=False,
                 message='Job not found or already finished',
-                errors=['Job cannot be cancelled'],
+                errors=[IssueDetail(code='VALIDATION_ERROR', message='Job cannot be cancelled')],
             )
         return ApiResponse(success=True, message='Cancel requested', data={'cancelled': True})
     except Exception as exc:
         logger.exception('Cancel job failed')
-        return ApiResponse(success=False, message='Failed to cancel job', errors=[str(exc)])
+        return _error_response('Failed to cancel job', exc)

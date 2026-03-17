@@ -1,8 +1,9 @@
 @echo off
 setlocal
 
-echo [windows] Starting uv-based local run (backend + frontend)
-echo [windows] Docker scripts are intentionally not provided on Windows in this project.
+echo [windows] Purpose: local Windows development via uv + npm
+echo [windows] This script starts backend and frontend directly on Windows.
+echo [windows] Docker-based workflows are handled by scripts/linux/run_docker.sh on Linux.
 
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..\..") do set "REPO_ROOT=%%~fI"
@@ -23,6 +24,9 @@ if errorlevel 1 (
 
 uv sync
 if errorlevel 1 goto :fail
+
+echo [windows] Backend URL:  http://127.0.0.1:8000
+echo [windows] Frontend URL: http://127.0.0.1:3000
 
 start "db-migrator-backend" cmd /k "cd /d ""%REPO_ROOT%"" && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
 if errorlevel 1 goto :fail

@@ -6,8 +6,6 @@ import TableOptionPicker from './TableOptionPicker';
 type TestStatus = 'idle' | 'success' | 'error';
 
 type DdlPanelState = {
-  username: string;
-  password: string;
   url: string;
   schema: string;
   tableName: string;
@@ -23,7 +21,7 @@ type DdlPanelState = {
 type Props = {
   state: DdlPanelState;
   message: string;
-  onFieldChange: (field: 'username' | 'password' | 'url' | 'schema' | 'tableName', value: string) => void;
+  onFieldChange: (field: 'url' | 'schema' | 'tableName', value: string) => void;
   onTestConnection: () => void;
   onLoadTables: () => void;
   onExtractDdl: () => void;
@@ -70,31 +68,21 @@ export default function DdlExtractPanel({
               <p className="section-kicker">Single DB</p>
               <h3 className="card-title">연결 정보</h3>
             </div>
-            <p className="helper">MySQL / PostgreSQL / Oracle / SQLite URL 형식을 그대로 사용할 수 있습니다.</p>
-          </div>
-
-          <div className="grid-2">
-            <label>
-              <span className="label">Username</span>
-              <input className="input" value={state.username} onChange={(e) => onFieldChange('username', e.target.value)} disabled={disabled} autoComplete="off" placeholder="선택 사항" />
-            </label>
-            <label>
-              <span className="label">Password</span>
-              <input className="input" type="password" value={state.password} onChange={(e) => onFieldChange('password', e.target.value)} disabled={disabled} autoComplete="new-password" placeholder="선택 사항" />
-            </label>
+            <p className="helper">Database URL(DSN) 한 칸으로 연결합니다. 인증 정보가 필요하면 URL 안에 포함해 주세요.</p>
           </div>
 
           <label>
-            <span className="label">Database URL</span>
+            <span className="label">Database URL / DSN</span>
             <input
               className="input"
               value={state.url}
               onChange={(e) => onFieldChange('url', e.target.value)}
               disabled={disabled}
               autoComplete="off"
-              placeholder="mysql+pymysql://... / oracle+oracledb://... / postgresql+psycopg://... / sqlite:///..."
+              placeholder="postgresql+psycopg://scott:tiger@localhost:5432/app / oracle+oracledb://scott:tiger@dbhost:1521/?service_name=FREEPDB1 / sqlite:////tmp/demo.db"
             />
           </label>
+          <p className="helper">예시: PostgreSQL / Oracle / SQLite</p>
 
           <div className="action-row">
             <button className="btn primary" type="button" onClick={onTestConnection} disabled={disabled || state.testing}>

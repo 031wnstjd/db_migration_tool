@@ -1,0 +1,67 @@
+services:
+  oracle-free:
+    image: gvenzl/oracle-xe:21-slim-faststart
+    environment:
+      - ORACLE_PASSWORD=oracle_admin_pass
+    ports:
+      - "1521:1521"
+    shm_size: "1g"
+    volumes:
+      - ./scripts/oracle/initdb:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 30s
+
+  backend:
+    depends_on:
+      oracle-free:
+        condition: service_healthy
+    environment:
+      - ORACLE_TEST_URL=oracle+oracledb://oracle_source:oracle_source_pass@oracle-free:1521/?service_name=XEPDB1
+      - ORACLE_TEST_USERNAME=oracle_source
+      - ORACLE_TEST_PASSWORD=oracle_source_pass
+      - ORACLE_TEST_SCHEMA=ORACLE_SOURCE
+      - ORACLE_TEST_TABLE=USERS
+      - ORACLE_SOURCE_URL=oracle+oracledb://oracle_source:oracle_source_pass@oracle-free:1521/?service_name=XEPDB1
+      - ORACLE_SOURCE_USERNAME=oracle_source
+      - ORACLE_SOURCE_PASSWORD=oracle_source_pass
+      - ORACLE_SOURCE_SCHEMA=ORACLE_SOURCE
+      - ORACLE_TARGET_URL=oracle+oracledb://oracle_target:oracle_target_pass@oracle-free:1521/?service_name=XEPDB1
+      - ORACLE_TARGET_USERNAME=oracle_target
+      - ORACLE_TARGET_PASSWORD=oracle_target_pass
+      - ORACLE_TARGET_SCHEMA=ORACLE_TARGET
+      - ORACLE_TARGET_TABLE=USERS
+    volumes:
+      - ./:/workspace
+
+  frontend:
+    command: npm run dev
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_BASE=http://localhost:8000/api
+      - NEXT_PUBLIC_TEST_PRESET_ENABLED=true
+      - NEXT_PUBLIC_TEST_SOURCE_URL=oracle+oracledb://oracle_source:oracle_source_pass@oracle-free:1521/?service_name=XEPDB1
+      - NEXT_PUBLIC_TEST_TARGET_URL=oracle+oracledb://oracle_target:oracle_target_pass@oracle-free:1521/?service_name=XEPDB1
+      - NEXT_PUBLIC_TEST_SOURCE_SCHEMA=ORACLE_SOURCE
+      - NEXT_PUBLIC_TEST_TARGET_SCHEMA=ORACLE_TARGET
+      - NEXT_PUBLIC_TEST_SOURCE_TABLE=USERS
+      - NEXT_PUBLIC_TEST_TARGET_TABLE=USERS
+      - NEXT_PUBLIC_TEST_DDL_URL=oracle+oracledb://oracle_source:oracle_source_pass@oracle-free:1521/?service_name=XEPDB1
+      - NEXT_PUBLIC_TEST_DDL_SCHEMA=ORACLE_SOURCE
+      - NEXT_PUBLIC_TEST_DDL_TABLE=USERS
+      - NEXT_PUBLIC_TEST_SELECTED_COLUMNS=ID,NAME,AGE,CREATED_AT
+      - NEXT_PUBLIC_TEST_KEY_COLUMNS=ID
+      - NEXT_PUBLIC_TEST_STRATEGY=MERGE
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      backend:
+        condition: service_started
